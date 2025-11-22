@@ -4,7 +4,6 @@ This is the open-source code for paper:
 
 This code is implemented based on *[Needle In a HayStack](https://github.com/gkamradt/LLMTest_NeedleInAHaystack/tree/main)*.
 
-【Update】 Support Phi3 now, thanks to the contribution made by @Wangmerlyn.
 ## Retrieval Head Detection
 An algorithm that statistically calculate the retrieval score of attention heads in a transformer model.
 Because FlashAttention can not return attention matrix, this algorithm is implemented by first caching with FlashAttention and apply normal attention for decoding. 
@@ -63,10 +62,3 @@ Masking top 30 retrieval heads vs 30 random heads:
 python needle_in_haystack_with_mask.py --mask_top 30 --s 1000 --e 100000  --model_path $path_to_model  #Results of  will be written in './results/graph/llama-2-7b-80k_block_top30'
 python needle_in_haystack_with_mask.py --mask_top -30 --s 1000 --e 100000  --model_path $path_to_model  #Results of  will be written in './results/graph/llama-2-7b-80k_block_random30'
 ```
-### Reulsts and Visualization:
-Replace 'model_name' in './viz/CreateVizFromLLMTesting.ipynb' by the folder name of Needle-in-a-Haystack results.
-
-**Mask top 30 Retrieval Head for Llama-2-7b-80K**:
-![alt text](viz/top30.png)
-**Mask random 30 non-Retrieval Head for Llama-2-7b-80K**:
-![alt text](viz/random.png)

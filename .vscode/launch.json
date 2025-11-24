@@ -1,0 +1,45 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Retrieval Head Detection(RTX 4090)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/retrieval_head_detection.py",
+            "args": [
+                "--model_path", "${input:modelPath}",
+                "--s", "0",
+                "--e", "5000"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Retrieval Head Detection(A100)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/retrieval_head_detection.py",
+            "args": [
+                "--model_path", "${input:modelPath}",
+                "--s", "0",
+                "--e", "50000"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "modelPath",
+            "description": "Enter the path to your model",
+            "default": "",
+            "type": "promptString"
+        }
+    ]
+}

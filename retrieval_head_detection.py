@@ -1,36 +1,47 @@
 """
-This script is adapted from 
-https://github.com/gkamradt/LLMTest_NeedleInAHaystack
+Retrieval Head Detection for Long-Context Language Models
 
-# GPT-4
-(
-python -u needle_in_haystack.py --s_len 0 --e_len 128000\
-    --model_provider OpenAI\
-    --model_name gpt-4-1106-preview
-    --api_key $OPENAI_API_KEY
-) 2>&1  | tee logs/eval_gpt_4_128k.log
+This module implements a statistical algorithm to identify "retrieval heads" - attention heads 
+that are mechanistically responsible for retrieving relevant information from long contexts.
+The algorithm is based on the paper "Retrieval Head Mechanistically Explains Long-Context Factuality".
 
-# LLaMA 2 32K. Remember to download the model first
-(
-python -u needle_in_haystack.py --s_len 0 --e_len 128000\
-    --model_provider LLaMA\
-    --model_path ../../../Llama-2-7B-32K-Instruct
-) 2>&1  | tee logs/eval_llama2_32k_instruct.log
+The detection process works by:
+1. Running needle-in-haystack tests with multiple context lengths and needle positions
+2. Tracking attention patterns during generation with full attention matrices
+3. Identifying heads that consistently attend to needle tokens during successful retrievals
+4. Computing retrieval scores based on attention to needle tokens
+5. Outputting ranked lists of retrieval heads for downstream analysis
 
-# LongChat. Remember to download the model first
-(
-python -u needle_in_haystack.py --s_len 0 --e_len 128000\
-    --model_provider LLaMA\
-    --model_path /ML-A800/models/longchat-7b-v1.5-32k
-) 2>&1  | tee logs/eval_longchat.log
+Usage:
+    Basic usage for detecting retrieval heads:
+    ```bash
+    python retrieval_head_detection.py --model_path /path/to/model --s 0 --e 50000
+    ```
+    
+    For faster detection with fewer samples:
+    ```bash
+    python retrieval_head_detection.py --model_path /path/to/model --s 0 --e 5000
+    ```
 
-# Our llama-2-7b-80k, requires 4*80G A100
-# require you to download the model first
-(
-python -u needle_in_haystack.py --s_len 0 --e_len 128000\
-    --model_provider LLaMA\
-    --model_path ../../../llama-2-7b-80k
-) 2>&1  | tee logs/eval_llama-2-7b-80k.log
+Output:
+    Results are saved to './head_score/{model_name}.json' containing:
+    - Head indices in format "layer-head": [list of retrieval scores]
+    - Scores represent frequency of attending to needle tokens during successful retrievals
+    - Higher scores indicate stronger retrieval capability
+
+Supported Models:
+    - LLaMA family (Llama-2-7B-80K, etc.)
+    - Yi models
+    - Qwen models  
+    - Mistral models
+    - Phi3 models
+
+Requirements:
+    - Single 80GB GPU for contexts up to 50K tokens
+    - Custom transformer implementations with attention tracking
+    - FlashAttention for memory efficiency during caching phase
+
+Adapted from: https://github.com/gkamradt/LLMTest_NeedleInAHaystack
 """
 
 #import tiktoken
@@ -39,7 +50,7 @@ import glob
 import json
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM, AutoConfig
 import sys
-sys.path.append("./faiss_attn/")
+sys.path.append(os.path.join(os.path.dirname(__file__), "faiss_attn"))
 from source.modeling_llama import LlamaForCausalLM
 from source.modeling_qwen2 import Qwen2ForCausalLM
 from source.modeling_mixtral import MixtralForCausalLM
@@ -56,6 +67,17 @@ import torch
 
 
 def reset_rope(model, model_max_train_len, scaling_factor):
+    """
+    Resets RoPE (Rotary Position Embedding) scaling for extended context models.
+    
+    Some models like llama-2-7b-80k require RoPE scaling adjustments to handle
+    contexts longer than their original training length.
+    
+    Args:
+        model: The transformer model to modify
+        model_max_train_len (int): Maximum training sequence length
+        scaling_factor (float): RoPE scaling factor (e.g., 10 for 80k context)
+    """
     for l in model.model.layers:
         l.self_attn.rotary_emb.scaling_factor = scaling_factor
         l.self_attn.rotary_emb._set_cos_sin_cache(seq_len=model_max_train_len, device=l.self_attn.rotary_emb.inv_freq.device, dtype=torch.float32)
@@ -64,7 +86,52 @@ scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
 
 class LLMNeedleHaystackTester:
     """
-    This class is used to test the LLM Needle Haystack.
+    Retrieval Head Detection System for Long-Context Language Models.
+    
+    This class implements a statistical algorithm to identify attention heads that are 
+    mechanistically responsible for information retrieval in long contexts. It uses the 
+    needle-in-haystack paradigm to test models across various context lengths and needle 
+    positions, tracking attention patterns to identify "retrieval heads".
+    
+    The detection algorithm:
+    1. Loads multiple needle-haystack test cases from configuration files
+    2. For each test case, inserts needles at various depths in long contexts
+    3. Runs model generation with attention tracking enabled (using torch mode)
+    4. During each generation step, analyzes which heads attend to needle tokens
+    5. Accumulates retrieval scores only for successful retrievals (ROUGE > 50%)
+    6. Outputs ranked lists of heads by their retrieval capability
+    
+    Key Features:
+    - Multi-needle testing with different haystack contexts
+    - Configurable context lengths and needle positions
+    - Support for multiple model architectures (LLaMA, Qwen, Mistral, etc.)
+    - Statistical significance through multiple test iterations
+    - Automatic result persistence and incremental updates
+    
+    Attributes:
+        needle_list (List[str]): List of needle texts to insert in contexts
+        haystack_dir_list (List[str]): Directories containing background text files
+        retrieval_question_list (List[str]): Questions to ask about each needle
+        real_ansers_list (List[str]): Expected answers for evaluation
+        head_counter (defaultdict): Accumulates retrieval scores per head
+        model_to_test: The language model being analyzed
+        layer_num (int): Number of transformer layers in the model
+        head_num (int): Number of attention heads per layer
+    
+    Example:
+        ```python
+        # Initialize detector for a specific model
+        detector = LLMNeedleHaystackTester(
+            model_name="/path/to/llama-model",
+            context_lengths_min=1000,
+            context_lengths_max=50000
+        )
+        
+        # Run detection process
+        detector.start_test(args)
+        
+        # Results saved to head_score/{model_name}.json
+        ```
     """
     def __init__(self,
                 needle="\nThe best thing to do in San Francisco is eat a sandwich and sit in Dolores Park on a sunny day.\n",
@@ -218,7 +285,36 @@ class LLMNeedleHaystackTester:
             for depth_percent in self.document_depth_percents:
                 task = self.bound_evaluate_and_log(context_length, depth_percent)
 
-    def retrieval_calculate(self, attention_maxtrix,retrieval_score, inp, step_token,topk=1):
+    def retrieval_calculate(self, attention_maxtrix, retrieval_score, inp, step_token, topk=1):
+        """
+        Core algorithm for detecting retrieval heads during generation.
+        
+        This method analyzes attention patterns at each generation step to identify
+        heads that are attending to needle tokens. It's the heart of the retrieval
+        head detection algorithm.
+        
+        Algorithm:
+        1. For each layer and head in the model
+        2. Get the top-k attention weights for the current generation token
+        3. Check if any top attention positions fall within needle token range
+        4. Verify token identity matches between attention target and needle
+        5. Increment retrieval score for heads attending to needle tokens
+        
+        Args:
+            attention_maxtrix (List[torch.Tensor]): Attention weights from all layers
+                Shape: [num_layers][batch_size][num_heads][seq_len][seq_len]
+            retrieval_score (List[List[List]]): Accumulator for retrieval scores
+                Shape: [num_layers][num_heads][2] where [0]=score, [1]=token
+            inp (torch.Tensor): Current input token being generated
+            step_token (str): String representation of current token
+            topk (int, optional): Number of top attention positions to check. Defaults to 1.
+            
+        Note:
+            Only counts attention to needle tokens when:
+            - Attention position is within needle span (self.needle_start <= i < self.needle_end)
+            - Token at attention position matches the actual needle token
+            - Normalizes score by needle length for fair comparison
+        """
         for layer_idx in range(self.layer_num):
             for head_idx in range(self.head_num):
                 values, idx = attention_maxtrix[layer_idx][0][head_idx][-1].topk(topk)
@@ -228,11 +324,49 @@ class LLMNeedleHaystackTester:
                         retrieval_score[layer_idx][head_idx][1] += step_token
                         break
     def retrieval_head_accumulate(self, retrieval_score):
+        """
+        Accumulates retrieval scores for successful needle retrievals.
+        
+        This method is called only when the model successfully retrieves the needle
+        (ROUGE score > 50%). It adds the current test's retrieval scores to the
+        running totals for each attention head.
+        
+        Args:
+            retrieval_score (List[List[List]]): Current test's retrieval scores
+                Shape: [num_layers][num_heads][2] where [0]=score, [1]=token
+                
+        Note:
+            - Only successful retrievals contribute to head scores
+            - Scores are accumulated across multiple test cases
+            - Final ranking is based on mean scores across all successful tests
+        """
         for layer_idx in range(self.layer_num):
             for head_idx in range(self.head_num):
                 self.head_counter[f"{layer_idx}-{head_idx}"].append(retrieval_score[layer_idx][head_idx][0])
 
     def decode(self, q_outputs, inp, decode_len, block_list=None):
+        """
+        Performs autoregressive generation with attention tracking.
+        
+        This method generates tokens while tracking attention patterns to identify
+        retrieval heads. Uses torch attention mode to get full attention matrices.
+        
+        Args:
+            q_outputs: Cached key-value states from context processing
+            inp (torch.Tensor): Starting token for generation
+            decode_len (int): Maximum number of tokens to generate
+            block_list (List, optional): Heads to mask (unused in detection)
+            
+        Returns:
+            Tuple[List[int], List[List[List]]]: 
+                - Generated token IDs
+                - Retrieval scores per head: [layer][head][score, token]
+                
+        Note:
+            - Uses attn_mode="torch" to get full attention matrices
+            - Calls retrieval_calculate() at each generation step
+            - Stops generation at newline tokens or EOS
+        """
         output, retrieval_score = [], [[[0, ''] for _ in range(self.head_num)] for _ in range(self.layer_num)]
         past_kv = q_outputs.past_key_values
         for step_i in range(decode_len):
@@ -247,6 +381,23 @@ class LLMNeedleHaystackTester:
         return output, retrieval_score 
 
     def find_needle_idx(self, needle):
+        """
+        Locates needle tokens within the input context.
+        
+        Finds the start and end positions of needle tokens in the tokenized input
+        sequence using fuzzy matching to handle tokenization differences.
+        
+        Args:
+            needle (str): The needle text to locate
+            
+        Returns:
+            Tuple[int, int]: Start and end token positions of needle, or (-1, -1) if not found
+            
+        Note:
+            - Uses 90% overlap threshold for fuzzy matching
+            - Handles cases where needle tokenization differs between contexts
+            - Essential for accurate attention analysis
+        """
         needle_ids = self.enc(needle, add_special_tokens=False)["input_ids"]
         print( self.enc.decode(needle_ids, skip_special_tokens=False))
         span_len = len(needle_ids)
@@ -259,6 +410,32 @@ class LLMNeedleHaystackTester:
         return -1, -1
 
     def evaluate_and_log(self, context_length, depth_percent):
+        """
+        Runs a single needle-in-haystack test and analyzes attention patterns.
+        
+        This is the main evaluation method that:
+        1. Generates context with needle at specified depth
+        2. Runs model inference with attention tracking
+        3. Evaluates retrieval success using ROUGE score
+        4. Updates retrieval head scores for successful retrievals
+        
+        Args:
+            context_length (int): Total context length in tokens
+            depth_percent (float): Needle position as percentage of context (0-100)
+            
+        Process:
+        1. Generate context with needle inserted at depth_percent
+        2. Create appropriate prompt format for the model
+        3. Run inference with attention tracking enabled
+        4. Evaluate response quality using ROUGE score vs expected answer
+        5. If ROUGE > 50%, accumulate retrieval scores for all heads
+        6. Save detailed results and update running head statistics
+        
+        Note:
+            - Only successful retrievals (ROUGE > 50%) contribute to head scores
+            - Results are saved to both individual files and accumulated statistics
+            - Prints top 20 retrieval heads after each successful test
+        """
         # Checks to see if you've already checked a length/percent/version.
         # This helps if the program stop running and you want to restart later
         # Go generate the required length context and place your needle statement in
@@ -494,6 +671,26 @@ class LLMNeedleHaystackTester:
         print ("\n\n")
 
     def start_test(self, args):
+        """
+        Main entry point for retrieval head detection process.
+        
+        Orchestrates the complete detection pipeline across multiple needle-haystack
+        test cases and saves final results.
+        
+        Args:
+            args: Command line arguments containing context length bounds
+            
+        Process:
+        1. Iterates through all needle-haystack test cases from needles.jsonl
+        2. For each test case, runs evaluation across context lengths and depths
+        3. Accumulates retrieval scores across all successful tests
+        4. Merges with existing results if head_score file exists
+        5. Saves final ranked head scores to head_score/{model_name}.json
+        
+        Output Format:
+            JSON file with structure: {"layer-head": [list_of_scores], ...}
+            where higher average scores indicate stronger retrieval capability
+        """
         for ni in range(len(self.needle_list)):
             self.needle = self.needle_list[ni]
             self.haystack_dir = self.haystack_dir_list[ni]

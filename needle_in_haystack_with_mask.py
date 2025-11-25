@@ -40,7 +40,7 @@ import json
 from transformers import AutoTokenizer, AutoConfig
 import sys
 import random
-sys.path.append("./faiss_attn/")
+sys.path.append(os.path.join(os.path.dirname(__file__), "faiss_attn"))
 from source.modeling_llama import LlamaForCausalLM, LlamaConfig
 from source.modeling_qwen2 import Qwen2ForCausalLM
 from source.modeling_mixtral import MixtralForCausalLM

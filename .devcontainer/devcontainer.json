@@ -1,9 +1,9 @@
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the
 // README at: https://github.com/devcontainers/templates/tree/main/src/python
 {
-	"name": "Bundoora:v013",
+	"name": "Pytorch (25.10-py3)",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "ghcr.io/skywardai/bundoora:v0.1.3-uv",
+	"image": "nvcr.io/nvidia/pytorch:25.10-py3",
 	"customizations": {
 		"vscode": {
 			"extensions": [

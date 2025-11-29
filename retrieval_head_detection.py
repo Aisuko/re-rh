@@ -244,10 +244,10 @@ class LLMNeedleHaystackTester:
             self.model_to_test = MistralForCausalLM.from_pretrained(
                     model_name,torch_dtype="auto",device_map='auto',use_flash_attention_2="flash_attention_2",trust_remote_code=True,
                 ).eval()
-        elif "Phi3" in self.model_version:
-            self.model_to_test = Phi3ForCausalLM.from_pretrained(
-                    model_name,torch_dtype="auto",device_map='auto',use_flash_attention_2="flash_attention_2",trust_remote_code=True,
-                ).eval()
+        # elif "Phi3" in self.model_version:
+        #     self.model_to_test = Phi3ForCausalLM.from_pretrained(
+        #             model_name,torch_dtype="auto",device_map='auto',use_flash_attention_2="flash_attention_2",trust_remote_code=True,
+        #         ).eval()
         else:
             self.model_to_test = LlamaForCausalLM.from_pretrained(model_name,
                 use_flash_attention_2="flash_attention_2", torch_dtype=torch.bfloat16,device_map='auto').eval()

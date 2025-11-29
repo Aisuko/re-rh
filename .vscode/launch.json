@@ -38,7 +38,7 @@
         {
             "id": "modelPath",
             "description": "Enter the path to your model",
-            "default": "",
+            "default": "yaofu/llama-2-7b-80k",
             "type": "promptString"
         }
     ]

@@ -1,91 +1,85 @@
-# Makefile for Retrieval Head Detection Documentation
-# Generates HTML documentation from Python docstrings using pdoc
+# Makefile for Retrieval Head Detection
+# Run retrieval head detection with different parameter configurations
+# Based on .vscode/launch.json configurations
 
 # Configuration
 PYTHON := python3
-PDOC := pdoc
-DOC_DIR := docs
-SOURCE_FILES := retrieval_head_detection.py needle_in_haystack_with_mask.py
-MODULE_DIR := faiss_attn/source
+SCRIPT := retrieval_head_detection.py
+
+# Model path from launch.json
+MODEL_PATH ?= yaofu/llama-2-7b-80k
+
+# Parameters from launch.json
+START := 0
+RTX4090_END := 5000
+A100_END := 50000
 
 # Default target
 .PHONY: all
-all: docs
+all: rtx4090
 
-# Install all dependencies
+# Install dependencies
 .PHONY: install
 install:
 	$(PYTHON) -m pip install -r requirements.txt
 
-# Install documentation dependencies only
-.PHONY: install-deps
-install-deps:
-	$(PYTHON) -m pip install pdoc3
+# RTX 4090 configuration (matches launch.json)
+.PHONY: rtx4090
+rtx4090:
+	@echo "Running Retrieval Head Detection (RTX 4090 config)..."
+	@echo "Model: $(MODEL_PATH), Range: $(START)-$(RTX4090_END)"
+	$(PYTHON) $(SCRIPT) --model_path $(MODEL_PATH) --s $(START) --e $(RTX4090_END)
 
-# Generate documentation for main modules
-.PHONY: docs
-docs: install-deps clean
-	@echo "Generating documentation..."
-	mkdir -p $(DOC_DIR)
-	$(PDOC) --html --output-dir $(DOC_DIR) --force $(SOURCE_FILES)
-	@echo "Documentation generated in $(DOC_DIR)/"
+# A100 configuration (matches launch.json)
+.PHONY: a100
+a100:
+	@echo "Running Retrieval Head Detection (A100 config)..."
+	@echo "Model: $(MODEL_PATH), Range: $(START)-$(A100_END)"
+	$(PYTHON) $(SCRIPT) --model_path $(MODEL_PATH) --s $(START) --e $(A100_END)
 
-# Generate documentation for custom modeling files
-.PHONY: docs-modeling
-docs-modeling: install-deps
-	@echo "Generating documentation for custom modeling files..."
-	mkdir -p $(DOC_DIR)/modeling
-	$(PDOC) --html --output-dir $(DOC_DIR)/modeling --force $(MODULE_DIR)/modeling_llama.py
-	$(PDOC) --html --output-dir $(DOC_DIR)/modeling --force $(MODULE_DIR)/modeling_qwen2.py
-	$(PDOC) --html --output-dir $(DOC_DIR)/modeling --force $(MODULE_DIR)/modeling_mistral.py
-	@echo "Modeling documentation generated in $(DOC_DIR)/modeling/"
+# Custom model path
+.PHONY: custom
+custom:
+	@echo "Running with custom parameters..."
+	@echo "Usage: make custom MODEL_PATH=your/model START=0 END=5000"
+	$(PYTHON) $(SCRIPT) --model_path $(MODEL_PATH) --s $(START) --e $(END)
 
-# Generate complete documentation
-.PHONY: docs-full
-docs-full: docs docs-modeling
-	@echo "Complete documentation generated!"
+# Quick test (small range)
+.PHONY: test
+test:
+	@echo "Running quick test (0-1000 tokens)..."
+	$(PYTHON) $(SCRIPT) --model_path $(MODEL_PATH) --s 0 --e 1000
 
-# Clean documentation directory
+# Create necessary directories
+.PHONY: setup
+setup:
+	@echo "Creating necessary directories..."
+	mkdir -p head_score
+	mkdir -p results/graph
+	mkdir -p contexts
+
+# Clean results
 .PHONY: clean
 clean:
-	@echo "Cleaning documentation directory..."
-	rm -rf $(DOC_DIR)
-
-# Serve documentation locally
-.PHONY: serve
-serve: docs
-	@echo "Starting local documentation server..."
-	@echo "Open http://localhost:8000 in your browser"
-	cd $(DOC_DIR) && $(PYTHON) -m http.server 8000
-
-# Quick documentation preview (single file)
-.PHONY: preview
-preview:
-	$(PDOC) --http localhost:8080 retrieval_head_detection.py
+	@echo "Cleaning results..."
+	rm -rf results/graph/*
+	rm -rf contexts/*
 
 # Help target
 .PHONY: help
 help:
-	@echo "Available targets:"
-	@echo "  all          - Generate main documentation (default)"
-	@echo "  install      - Install all dependencies from requirements.txt"
-	@echo "  docs         - Generate documentation for main modules"
-	@echo "  docs-modeling- Generate documentation for custom modeling files"
-	@echo "  docs-full    - Generate complete documentation"
-	@echo "  install-deps - Install pdoc3 dependency only"
-	@echo "  clean        - Remove generated documentation"
-	@echo "  serve        - Serve documentation on localhost:8000"
-	@echo "  preview      - Live preview on localhost:8080"
-	@echo "  help         - Show this help message"
-
-# Check if source files exist
-.PHONY: check
-check:
-	@echo "Checking source files..."
-	@for file in $(SOURCE_FILES); do \
-		if [ -f $$file ]; then \
-			echo "✓ $$file exists"; \
-		else \
-			echo "✗ $$file missing"; \
-		fi; \
-	done
+	@echo "Available targets (based on .vscode/launch.json):"
+	@echo "  rtx4090  - RTX 4090 config (0-5K tokens) [default]"
+	@echo "  a100     - A100 config (0-50K tokens)"
+	@echo "  custom   - Custom parameters (set MODEL_PATH, START, END)"
+	@echo "  test     - Quick test (0-1K tokens)"
+	@echo "  install  - Install dependencies"
+	@echo "  setup    - Create necessary directories"
+	@echo "  clean    - Clean result files"
+	@echo "  help     - Show this help"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make rtx4090"
+	@echo "  make a100"
+	@echo "  make custom MODEL_PATH=microsoft/DialoGPT-medium START=0 END=10000"
+	@echo "  make test MODEL_PATH=gpt2"

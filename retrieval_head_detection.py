@@ -63,6 +63,7 @@ from datetime import datetime, timezone
 from collections import defaultdict
 import time
 import torch
+from tqdm import tqdm
 
 
 
@@ -250,7 +251,7 @@ class LLMNeedleHaystackTester:
         #         ).eval()
         else:
             self.model_to_test = LlamaForCausalLM.from_pretrained(model_name,
-                use_flash_attention_2="flash_attention_2", torch_dtype=torch.bfloat16,device_map='auto').eval()
+                use_flash_attention_2="flash_attention_2", torch_dtype=torch.bfloat16, device_map='auto').eval()
             
         if 'llama-2-7b-80k' in self.model_version:
             scaling_factor = 10
@@ -259,7 +260,7 @@ class LLMNeedleHaystackTester:
         if "CUDA_VISIBLE_DEVICES" in os.environ:
             self.multi_gpus = len(os.environ["CUDA_VISIBLE_DEVICES"])>1
         else:
-            self.multi_gpus = True
+            self.multi_gpus = False
             
         self.model_to_test_description = model_name
         self.evaluation_model = None
@@ -276,14 +277,21 @@ class LLMNeedleHaystackTester:
     def bound_evaluate_and_log(self, *args):
         self.evaluate_and_log(*args)
 
-    def run_test(self, args):
+    def run_test(self, args, overall_pbar=None):
         # Run through each iteration of context_lengths and depths
-        tasks = []
-         
-        for context_length in self.context_lengths:
-            if context_length < args.s_len or context_length > args.e_len: continue
+        valid_lengths = [cl for cl in self.context_lengths if args.s_len <= cl <= args.e_len]
+        
+        for context_length in valid_lengths:
             for depth_percent in self.document_depth_percents:
-                task = self.bound_evaluate_and_log(context_length, depth_percent)
+                # Update progress description
+                if overall_pbar:
+                    overall_pbar.set_description(f"Processing len={context_length}, depth={depth_percent}%")
+                
+                self.bound_evaluate_and_log(context_length, depth_percent)
+                
+                # Update overall progress
+                if overall_pbar:
+                    overall_pbar.update(1)
 
     def retrieval_calculate(self, attention_maxtrix, retrieval_score, inp, step_token, topk=1):
         """
@@ -369,7 +377,8 @@ class LLMNeedleHaystackTester:
         """
         output, retrieval_score = [], [[[0, ''] for _ in range(self.head_num)] for _ in range(self.layer_num)]
         past_kv = q_outputs.past_key_values
-        for step_i in range(decode_len):
+        decode_pbar = tqdm(range(decode_len), desc="Generating tokens", leave=False, position=1)
+        for step_i in decode_pbar:
             inp = inp.view(1, 1)
             outputs = self.model_to_test(input_ids=inp, past_key_values=past_kv, use_cache=True, output_attentions=True, attn_mode="torch" )
             past_kv = outputs.past_key_values
@@ -377,7 +386,10 @@ class LLMNeedleHaystackTester:
             step_token = self.enc.convert_ids_to_tokens(inp.item())
             output.append(inp.item())
             self.retrieval_calculate(outputs.attentions, retrieval_score, inp, step_token)
-            if step_token=='<0x0A>' or inp.item()==144: break
+            if step_token=='<0x0A>' or inp.item()==144: 
+                decode_pbar.close()
+                break
+        decode_pbar.close()
         return output, retrieval_score 
 
     def find_needle_idx(self, needle):
@@ -691,21 +703,51 @@ class LLMNeedleHaystackTester:
             JSON file with structure: {"layer-head": [list_of_scores], ...}
             where higher average scores indicate stronger retrieval capability
         """
+        # Calculate total tasks for progress tracking
+        valid_lengths = [cl for cl in self.context_lengths if args.s_len <= cl <= args.e_len]
+        total_tasks = len(self.needle_list) * len(valid_lengths) * len(self.document_depth_percents)
+        
+        print(f"\n=== Retrieval Head Detection Started ===")
+        print(f"Total needle cases: {len(self.needle_list)}")
+        print(f"Context lengths: {len(valid_lengths)} (range: {min(valid_lengths)}-{max(valid_lengths)})")
+        print(f"Depth percentages: {len(self.document_depth_percents)}")
+        print(f"Total tasks to process: {total_tasks}")
+        print(f"Model: {self.model_name}")
+        print("=" * 50)
+        
+        # Create overall progress bar
+        overall_pbar = tqdm(total=total_tasks, desc="Overall Progress", position=0)
+        
         for ni in range(len(self.needle_list)):
             self.needle = self.needle_list[ni]
             self.haystack_dir = self.haystack_dir_list[ni]
             self.real_needle  = self.real_ansers_list[ni]
             self.retrieval_question = self.retrieval_question_list[ni]
+            
+            needle_desc = f"Needle {ni+1}/{len(self.needle_list)}: {self.needle[:50]}..."
+            tqdm.write(f"\n{needle_desc}")
+            
             if self.print_ongoing_status:
                 self.print_start_test_summary()
-            self.run_test(args)
+            self.run_test(args, overall_pbar)
+        
+        # Close progress bar
+        overall_pbar.close()
+        
+        print("\n=== Processing Complete ===")
+        print("Saving results...")
+        
         if os.path.exists(f"head_score/{self.model_version}.json"):
             with open(f"./head_score/{self.model_version}.json", "r") as file:
                 head_counter = json.loads(file.readline())
             for k,v in head_counter.items():
                 self.head_counter[k] += v
+        
         with open(f"head_score/{self.model_version}.json", 'w') as f:
             json.dump(self.head_counter, f)
+        
+        print(f"Results saved to head_score/{self.model_version}.json")
+        print("=== Detection Complete ===")
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/retrieval_head_detection.py",
             "args": [
-                "--model_path", "${input:modelPath}",
+                "--model_path", "yaofu/llama-2-7b-80k",
                 "--s", "0",
                 "--e", "5000"
             ],
@@ -23,7 +23,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/retrieval_head_detection.py",
             "args": [
-                "--model_path", "${input:modelPath}",
+                "--model_path", "yaofu/llama-2-7b-80k",
                 "--s", "0",
                 "--e", "50000"
             ],
